@@ -42,18 +42,34 @@ def sendWarning(x):
     """
     Placeholder function for sending a warning.
     """
-    pass
+    print("You better change your posture or you'll die!!")
 
 def parse_arguments():
+    # offset threshold -> Distance between left and right shoulders
+        # Why It Exists:
+        # This checks whether the person is:
+        # Facing sideways (correct for posture analysis)
+        # Facing front (bad for angle calculation)
+    # --neck-angle-threshold -> angle between left shoulder and left ear
+    # torso threshold -> angle between hip and shoulder -> how m,uch upper body is leaning
+    # time-threshold -> alert would be generated after this much time of bad posture
+
     parser = argparse.ArgumentParser(description='Posture Monitor with MediaPipe')
     parser.add_argument('--video', type=str, default=0, help='Path to the input video file. If not provided, the webcam will be used.')
+
     parser.add_argument('--offset-threshold', type=int, default=100, help='Threshold value for shoulder alignment.')
     parser.add_argument('--neck-angle-threshold', type=int, default=25, help='Threshold value for neck inclination angle.')
     parser.add_argument('--torso-angle-threshold', type=int, default=10, help='Threshold value for torso inclination angle.')
     parser.add_argument('--time-threshold', type=int, default=180, help='Time threshold for triggering a posture alert.')
+    parser.add_argument('--save-video', action='store_true', help='Save output video')
+    parser.add_argument('--output-dir', type=str, default='output', help='Output directory')
+
     return parser.parse_args()
 
-def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, torso_angle_threshold=10, time_threshold=180):
+def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, 
+         torso_angle_threshold=10, time_threshold=180, 
+         save_video=False, output_dir="output"):
+
     # Initialize frame counters.
     good_frames = 0
     bad_frames = 0
@@ -77,6 +93,23 @@ def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, torso_a
 
     # For file input, replace file name with <path>.
     cap = cv2.VideoCapture(video_path) if video_path else cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open video.")
+        return
+    # Setup video writer if saving is enabled
+    out = None
+    if save_video:
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+
+        output_path = os.path.join(output_dir, "output.mp4")
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        print(f"Saving video to: {output_path}")
 
     # Meta.
     fps = int(cap.get(cv2.CAP_PROP_FPS))
@@ -84,6 +117,7 @@ def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, torso_a
     while True:
         # Capture frames.
         success, image = cap.read()
+
         if not success:
             print("Null.Frames")
             break
@@ -134,7 +168,9 @@ def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, torso_a
             cv2.putText(image, str(int(offset)) + ' Shoulders not aligned', (w - 280, 30), font, 0.6, red, 2)
 
         # Calculate angles.
+        # neck inc -> the angle between shoulder and ear.
         neck_inclination = findAngle(l_shldr_x, l_shldr_y, l_ear_x, l_ear_y)
+        # Torso inclination -> angle between hip and shoulder
         torso_inclination = findAngle(l_hip_x, l_hip_y, l_shldr_x, l_shldr_y)
 
         # Draw landmarks.
@@ -204,20 +240,31 @@ def main(video_path=None, offset_threshold=100, neck_angle_threshold=25, torso_a
         if bad_time > time_threshold:
             sendWarning()
 
+        #above logic is for pre recorded videos. if we use webcamthen use realtime time calculation
+        # start_time = time.time()
+        # elapsed_time = time.time() - start_time
+        
+
+
         # Flip the image horizontally for a selfie-view display.
         cv2.imshow('MediaPipe Pose', image)
+        if save_video and out is not None:
+            out.write(image)
 
         # Exit the loop if the 'q' key is pressed.
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     # Release the camera and close the windows.
+    if out is not None:
+        out.release()
+
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     args = parse_arguments()
-    
+    print
     print("Arguments:")
     print(f"Video: {args.video}")
     print(f"Offset Threshold: {args.offset_threshold}")
@@ -225,4 +272,13 @@ if __name__ == "__main__":
     print(f"Torso Angle Threshold: {args.torso_angle_threshold}")
     print(f"Time Threshold: {args.time_threshold}")
 
-    main(args.video)
+    main(
+    video_path=args.video,
+    offset_threshold=args.offset_threshold,
+    neck_angle_threshold=args.neck_angle_threshold,
+    torso_angle_threshold=args.torso_angle_threshold,
+    time_threshold=args.time_threshold,
+    save_video=args.save_video,
+    output_dir=args.output_dir
+)
+

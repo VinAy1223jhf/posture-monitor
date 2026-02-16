@@ -8,6 +8,7 @@ __pycache__/
 venv/
 venv.bak/
 env/
+.venv/
 
 # IDE files
 .idea/
@@ -34,3 +35,7 @@ __pycache__/
 
 # Environment
 .env
+
+# Local data and outputs
+dataset/
+output/
