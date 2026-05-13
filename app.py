@@ -20,6 +20,15 @@ def parse_arguments():
 
 # initialize mrdiapipe
 mp_pose = mp.solutions.pose
+mp_face_mesh = mp.solutions.face_mesh
+
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=False,
+    max_num_faces=1,
+    refine_landmarks=True,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
 mp_drawing = mp.solutions.drawing_utils
 
 pose = mp_pose.Pose(
@@ -80,6 +89,21 @@ def calculate_angle(a, b, c):
 
     return angle
 
+def calculate_ear(eye_points):
+    """
+    Computes Eye Aspect Ratio (EAR)
+    """
+
+    p1, p2, p3, p4, p5, p6 = eye_points
+
+    vertical1 = np.linalg.norm(np.array(p2) - np.array(p6))
+    vertical2 = np.linalg.norm(np.array(p3) - np.array(p5))
+
+    horizontal = np.linalg.norm(np.array(p1) - np.array(p4))
+
+    ear = (vertical1 + vertical2) / (2.0 * horizontal)
+
+    return ear
 # caliberation for first 30 frames. assumes that user is sitting corret in the first second(basically gets a reference)
 
 # orientation detection
@@ -106,7 +130,16 @@ FRONT_THRESHOLD = 8
 SIDE_HEAD_THRESHOLD = 8
 SIDE_HIP_THRESHOLD = 4
 SIDE_COMBO_THRESHOLD = 6
+LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
+RIGHT_EYE_IDX = [362, 385, 387, 263, 373, 380]
 
+EAR_baseline = None
+ear_buffer = []
+EAR_SMOOTHING_WINDOW = 5
+
+eye_strain = 0.0
+smoothed_ear = 0.0
+alpha_eye = 0.05
 # we will not display every deviation in angle. we will be displaying the mean of last 5 angle values bcz
 # Angle might jump:
 # 78° → 80° → 75° → 82° → 74°
@@ -147,6 +180,7 @@ while cap.isOpened():
 
     # process frame with pose model
     results = pose.process(rgb_frame)
+    face_results = face_mesh.process(rgb_frame)
 
     # safe pose check
     if not results.pose_landmarks:
@@ -157,7 +191,34 @@ while cap.isOpened():
 
     # get landmarks from pose model
     landmarks = results.pose_landmarks.landmark
+    if face_results.multi_face_landmarks:
 
+        face_landmarks = face_results.multi_face_landmarks[0]
+
+        h, w, _ = frame.shape
+
+        left_eye = []
+        right_eye = []
+
+        for idx in LEFT_EYE_IDX:
+            point = face_landmarks.landmark[idx]
+            left_eye.append((int(point.x * w), int(point.y * h)))
+
+        for idx in RIGHT_EYE_IDX:
+            point = face_landmarks.landmark[idx]
+            right_eye.append((int(point.x * w), int(point.y * h)))
+
+        left_ear = calculate_ear(left_eye)
+        right_ear = calculate_ear(right_eye)
+
+        ear = (left_ear + right_ear) / 2.0
+
+        ear_buffer.append(ear)
+
+        if len(ear_buffer) > EAR_SMOOTHING_WINDOW:
+            ear_buffer.pop(0)
+
+        smoothed_ear = np.mean(ear_buffer)
     # -------------------------
     # EXTRACT LANDMARKS
     # -------------------------
@@ -319,7 +380,8 @@ while cap.isOpened():
     # -------------------------
     # CALIBRATION(taking refrence angles)
     # -------------------------
-
+    if EAR_baseline is None and stable and face_results.multi_face_landmarks:
+        EAR_baseline = smoothed_ear
     if not calibrating and stable:
         if orientation == "FRONT VIEW" and front_reference is None:
             calibrating = True
@@ -332,6 +394,7 @@ while cap.isOpened():
             calibration_start_time = current_time
             calibration_orientation = "SIDE VIEW"
             calibration_data = []
+
 
     if calibrating:
         if calibration_orientation == "FRONT VIEW":
@@ -460,13 +523,26 @@ while cap.isOpened():
             # 1. Calculate Instantaneous Strain
             # Note: We use linear severity here to match the 
             # ergonomic research timelines more accurately.
-            current_strain = S_baseline + (k_gain * severity)
+            if EAR_baseline is not None:
 
+                eye_deviation = max(
+                    0,
+                    (EAR_baseline - smoothed_ear) / EAR_baseline
+                )
+
+                eye_strain += eye_deviation * delta_time * alpha_eye
+                eye_strain = min(1.0, eye_strain)
+                
+            current_strain = (
+                S_baseline
+                + (k_gain * severity)
+                + eye_strain
+            )
             # 2. Update fatigue (Cumulative)
             # delta_time ensures it's per second, not per frame
             fatigue += current_strain * delta_time
-
             # 3. Clamp fatigue between 0 and 100
+
             fatigue = max(0, min(100, fatigue))
 
         # -------------------------
@@ -516,13 +592,7 @@ while cap.isOpened():
 
             deviation = abs(smoothed_front_angle - front_reference)
 
-            cv2.putText(frame,
-                        f"Deviation: {deviation:.1f}",
-                        (10, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 165, 255),
-                        2)
+            
     # display side angle values
     if orientation == "SIDE VIEW":
 
@@ -634,7 +704,21 @@ while cap.isOpened():
                 0.7,
                 fatigue_color,
                 2)
-    
+    cv2.putText(frame,
+            f"EAR: {smoothed_ear:.3f}",
+            (10, 390),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2)
+
+    cv2.putText(frame,
+                f"Eye Strain: {eye_strain:.3f}",
+                (10, 420),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 255),
+                2)
     # Fatigue progress bar
     bar_x = 10
     bar_y = 290
@@ -680,7 +764,7 @@ while cap.isOpened():
 
 
 
-
+        
 # cleanup
 cap.release()
 
